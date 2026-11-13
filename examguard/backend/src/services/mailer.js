@@ -54,6 +54,44 @@ const fmt = (d) => new Date(d).toLocaleString('en-IN', { timeZone: env.displayTz
 
 async function sendEmail({ to, subject, html }) {
   assertSafeEmail(subject, html);
+
+  // Brevo HTTPS API (works on Render free tier where SMTP ports are blocked)
+  if (env.emailProvider === 'brevo' || process.env.BREVO_API_KEY) {
+    try {
+      const apiKey = process.env.BREVO_API_KEY;
+      if (!apiKey) {
+        console.warn('[email] EMAIL_PROVIDER=brevo but BREVO_API_KEY is missing');
+        return { ok: false, reason: 'missing_brevo_key' };
+      }
+      const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': apiKey,
+        },
+        body: JSON.stringify({
+          sender: {
+            name: env.emailFromName || 'ExamGuard',
+            email: env.fromEmail || 'mani.s.madineni@gmail.com',
+          },
+          to: [{ email: to }],
+          subject,
+          htmlContent: html,
+        }),
+      });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        console.error('[email:brevo] send failed:', resp.status, errData);
+        return { ok: false, reason: `brevo: ${errData.message || resp.status}`.slice(0, 120) };
+      }
+      const data = await resp.json().catch(() => ({}));
+      return { ok: true, id: data.messageId };
+    } catch (e) {
+      console.error('[email:brevo] error:', e.message);
+      return { ok: false, reason: `brevo: ${String(e.message).slice(0, 120)}` };
+    }
+  }
+
   // Your OWN mail id via SMTP (Gmail with an App Password, or any SMTP server).
   if (env.emailProvider === 'smtp') {
     try {
@@ -76,6 +114,7 @@ async function sendEmail({ to, subject, html }) {
       return { ok: false, reason: `smtp: ${String(e.message).slice(0, 120)}` };
     }
   }
+
   if (env.emailProvider === 'resend') {
     try {
       if (env.emergentEmailKey) {
